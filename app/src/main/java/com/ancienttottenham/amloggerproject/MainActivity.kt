@@ -31,18 +31,19 @@ class MainActivity : AppCompatActivity() {
 
 // Simple logging
         AMLogger.debug("This is a debug message")
-        AMLogger.info("User logged in", "Auth")
+        AMLogger.info("User logged in")
 
         val testException = RuntimeException("This is a test exception")
-        AMLogger.error("Network error occurred", "Network", testException)
+        AMLogger.error("Network error occurred", exception = testException)
 
 // Convenience methods
         AMLogger.d("Debug message")
         AMLogger.i("Info message")
         AMLogger.e("Error message")
+        AMLogger.w("Warning message")
 
 // Performance measurement
-        val result = AMLogger.measure("DatabaseQuery") {
+        val result = AMLogger.measure() {
             // Simulate a database query
             Thread.sleep(100)
             "Query result"

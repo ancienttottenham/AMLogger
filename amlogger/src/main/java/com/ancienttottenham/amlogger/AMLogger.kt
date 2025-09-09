@@ -1,65 +1,27 @@
 package com.ancienttottenham.amlogger
 
-import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.*
+import com.ancienttottenham.amlogger.core.*
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
 
+/**
+ * Public façade that preserves the original API.
+ */
 object AMLogger {
 
     enum class Level(val priority: Int, val emoji: String, val colorCode: String) {
-        VERBOSE(2, "💜", "\u001B[37m"),  // White
-        DEBUG(3, "💚", "\u001B[36m"),    // Cyan
-        INFO(4, "💙", "\u001B[32m"),     // Green
-        WARNING(5, "💛", "\u001B[33m"),  // Yellow
-        ERROR(6, "❤️", "\u001B[31m")     // Red
+        VERBOSE(2, "💜", "\u001B[37m"),
+        DEBUG(3, "💚", "\u001B[36m"),
+        INFO(4, "💙", "\u001B[32m"),
+        WARNING(5, "💛", "\u001B[33m"),
+        ERROR(6, "❤️", "\u001B[31m")
     }
 
-    private var minLevel: Level = Level.VERBOSE
-    private var dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
-    private var logToConsole = true
-    private var logToFile = false
-    private var showEmojis = true
-    private var showColors = true
-    private var showThreadName = false
-    private var showFileName = true
-    private var showFunctionName = true
-    private var showLineNumber = true
-
-    // File logging
-    private var logFile: File? = null
-    private var maxFileSize: Long = 10 * 1024 * 1024 // 10MB
-    private var maxBackupFiles = 5
-
-    // Async logging
-    private val logQueue = ConcurrentLinkedQueue<LogEntry>()
-    private var loggingScope: CoroutineScope? = null
-
-    // Filters and formatting
-    private val filters = mutableListOf<(LogEntry) -> Boolean>()
-    private var logFormat = LogFormat.DETAILED
-
-    data class LogEntry(
-        val level: Level,
-        val message: String,
-        val tag: String,
-        val timestamp: Date,
-        val thread: String,
-        val fileName: String,
-        val functionName: String,
-        val lineNumber: Int,
-        val exception: Throwable? = null
-    )
-
-    enum class LogFormat {
-        MINIMAL,    // Just message
-        COMPACT,    // Time + Level + Message
-        DETAILED,   // Full info with file/function
-        CUSTOM      // User-defined format
-    }
+    enum class LogFormat { MINIMAL, COMPACT, DETAILED, CUSTOM }
 
     class Configuration {
         var minLevel: Level = Level.VERBOSE
@@ -73,306 +35,127 @@ object AMLogger {
         var showLineNumber: Boolean = true
         var dateFormat: String = "yyyy-MM-dd HH:mm:ss.SSS"
         var logFormat: LogFormat = LogFormat.DETAILED
-        var fileMaxSize: Long = 10 * 1024 * 1024 // 10MB
+        var fileMaxSize: Long = 10L * 1024 * 1024
         var maxBackupFiles: Int = 5
         var logDirectory: File? = null
 
-        fun build() = apply {
-            AMLogger.minLevel = minLevel
-            AMLogger.logToConsole = logToConsole
-            AMLogger.logToFile = logToFile
-            AMLogger.showEmojis = showEmojis
-            AMLogger.showColors = showColors
-            AMLogger.showThreadName = showThreadName
-            AMLogger.showFileName = showFileName
-            AMLogger.showFunctionName = showFunctionName
-            AMLogger.showLineNumber = showLineNumber
-            AMLogger.dateFormat = SimpleDateFormat(dateFormat, Locale.getDefault())
-            AMLogger.logFormat = logFormat
-            AMLogger.maxFileSize = fileMaxSize
-            AMLogger.maxBackupFiles = maxBackupFiles
-
-            if (logToFile && logDirectory != null) {
-                setupFileLogging(logDirectory!!)
+        internal fun toCore(now: Date = Date()): CoreConfig {
+            val sinks = buildList<SinkConfig> {
+                if (logToConsole) add(LogcatSinkConfig)
+                if (logToFile) {
+                    val dir = logDirectory
+                        ?: throw IllegalArgumentException("logDirectory must be provided when logToFile = true")
+                    add(
+                        FileSinkConfig(
+                            directory = dir,
+                            maxBytes = fileMaxSize,
+                            maxBackups = maxBackupFiles,
+                            filenamePrefix = "app_",
+                            filenameDatePattern = "yyyyMMdd",
+                            gzipBackups = true
+                        )
+                    )
+                }
             }
 
-            setupAsyncLogging()
+            return CoreConfig(
+                minPriority = minLevel.priority,
+                dateFormat = SimpleDateFormat(dateFormat, Locale.getDefault()),
+                format = when (logFormat) {
+                    LogFormat.MINIMAL -> CoreConfig.Format.MINIMAL
+                    LogFormat.COMPACT -> CoreConfig.Format.COMPACT
+                    LogFormat.DETAILED -> CoreConfig.Format.DETAILED
+                    LogFormat.CUSTOM -> CoreConfig.Format.DETAILED
+                },
+                showThread = showThreadName,
+                showFile = showFileName,
+                showFunction = showFunctionName,
+                showLine = showLineNumber,
+                showEmojis = showEmojis,
+                showColors = showColors,
+                sinks = sinks
+            )
         }
     }
 
-    /**
-     * Configure the logger with a fluent API
-     */
+    private var configured = false
+    private val filters = mutableListOf<(LogEntry) -> Boolean>()
+
+    data class LogEntry(
+        val level: Level,
+        val message: String,
+        val tag: String,
+        val timestamp: Date,
+        val thread: String,
+        val fileName: String?,
+        val functionName: String?,
+        val lineNumber: Int?,
+        val exception: Throwable? = null
+    )
+
     fun configure(block: Configuration.() -> Unit) {
-        Configuration().apply(block).build()
+        val cfg = Configuration().apply(block)
+        AMLoggerCore.init(cfg.toCore())
+        configured = true
     }
 
-    private fun setupFileLogging(directory: File) {
-        try {
-            if (!directory.exists()) {
-                directory.mkdirs()
-            }
-            logFile = File(directory, "app_${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())}.log")
-        } catch (e: Exception) {
-            Log.e("AMLogger", "Failed to setup file logging", e)
+    fun addFilter(filter: (LogEntry) -> Boolean) {
+        filters.add(filter)
+        AMLoggerCore.setPredicate { core ->
+            val entry = core.toPublic()
+            filters.all { it(entry) }
         }
     }
 
-    private fun setupAsyncLogging() {
-        loggingScope?.cancel() // Cancel any existing scope
-        loggingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-        loggingScope?.launch {
-            while (isActive) {
-                try {
-                    val entry = logQueue.poll()
-                    if (entry != null) {
-                        processLogEntry(entry)
-                    } else {
-                        delay(10) // Small delay when queue is empty
-                    }
-                } catch (e: Exception) {
-                    Log.e("AMLogger", "Error in async logging", e)
-                }
-            }
-        }
+    fun removeAllFilters() {
+        filters.clear()
+        AMLoggerCore.setPredicate(null)
     }
 
-    private fun processLogEntry(entry: LogEntry) {
-        if (entry.level.priority < minLevel.priority) return
+    fun flush() = AMLoggerCore.flush()
 
-        // Apply filters
-        if (filters.any { !it(entry) }) return
+    fun getLogFileSize(): Long = AMLoggerCore.currentFileLength()
 
-        // Format message
-        val formattedMessage = formatLogEntry(entry)
+    fun clearLogFile() = AMLoggerCore.truncateCurrentFile()
 
-        // Output to console (Logcat)
-        if (logToConsole) {
-            val tag = if (entry.tag.isNotEmpty()) entry.tag else "AMLogger"
-            when (entry.level) {
-                Level.VERBOSE -> Log.v(tag, formattedMessage, entry.exception)
-                Level.DEBUG -> Log.d(tag, formattedMessage, entry.exception)
-                Level.INFO -> Log.i(tag, formattedMessage, entry.exception)
-                Level.WARNING -> Log.w(tag, formattedMessage, entry.exception)
-                Level.ERROR -> Log.e(tag, formattedMessage, entry.exception)
-            }
-        }
+    fun shutdown() = AMLoggerCore.shutdown()
 
-        // Output to file
-        if (logToFile && logFile != null) {
-            writeToFile(entry, formattedMessage)
-        }
-
-        // Console output with colors (for testing)
-        if (showColors) {
-            val coloredMessage = "${entry.level.colorCode}$formattedMessage\u001B[0m"
-            println(coloredMessage)
-        }
-    }
-
-    private fun formatLogEntry(entry: LogEntry): String {
-        return when (logFormat) {
-            LogFormat.MINIMAL -> entry.message
-
-            LogFormat.COMPACT -> {
-                val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(entry.timestamp)
-                val emoji = if (showEmojis) "${entry.level.emoji} " else ""
-                "$emoji$time ${entry.level.name}: ${entry.message}"
-            }
-
-            LogFormat.DETAILED -> {
-                val components = mutableListOf<String>()
-
-                // Emoji
-                if (showEmojis) {
-                    components.add(entry.level.emoji)
-                }
-
-                // Timestamp
-                components.add(dateFormat.format(entry.timestamp))
-
-                // Level
-                components.add("[${entry.level.name}]")
-
-                // Thread
-                if (showThreadName) {
-                    components.add("[${entry.thread}]")
-                }
-
-                // Location info
-                val locationParts = mutableListOf<String>()
-                if (showFileName) locationParts.add(entry.fileName)
-                if (showFunctionName) locationParts.add(entry.functionName)
-                if (showLineNumber) locationParts.add(":${entry.lineNumber}")
-
-                if (locationParts.isNotEmpty()) {
-                    components.add("(${locationParts.joinToString("")})")
-                }
-
-                // Message
-                components.add("→ ${entry.message}")
-
-                components.joinToString(" ")
-            }
-
-            LogFormat.CUSTOM -> entry.message // User should handle custom formatting
-        }
-    }
-
-    private fun writeToFile(entry: LogEntry, formattedMessage: String) {
-        try {
-            logFile?.let { file ->
-                // Check file size and rotate if needed
-                if (file.length() > maxFileSize) {
-                    rotateLogFiles(file)
-                }
-
-                val plainMessage = formattedMessage.replace(Regex("\u001B\\[[0-9;]*m"), "") // Remove ANSI codes
-                file.appendText("$plainMessage\n")
-            }
-        } catch (e: Exception) {
-            Log.e("AMLogger", "Failed to write to log file", e)
-        }
-    }
-
-    private fun rotateLogFiles(currentFile: File) {
-        try {
-            val baseName = currentFile.nameWithoutExtension
-            val extension = currentFile.extension
-            val directory = currentFile.parentFile
-
-            // Shift existing backup files
-            for (i in maxBackupFiles - 1 downTo 1) {
-                val oldBackup = File(directory, "${baseName}.${i}.${extension}")
-                val newBackup = File(directory, "${baseName}.${i + 1}.${extension}")
-                if (oldBackup.exists()) {
-                    oldBackup.renameTo(newBackup)
-                }
-            }
-
-            // Move current file to .1 backup
-            val firstBackup = File(directory, "${baseName}.1.${extension}")
-            currentFile.renameTo(firstBackup)
-
-            // Create new current file
-            currentFile.createNewFile()
-
-        } catch (e: Exception) {
-            Log.e("AMLogger", "Failed to rotate log files", e)
-        }
-    }
-
-    private fun getCallerInfo(): Triple<String, String, Int> {
-        val stackTrace = Thread.currentThread().stackTrace
-
-        // Find the first stack frame that's not in this logger class
-        for (i in 2 until stackTrace.size) {
-            val element = stackTrace[i]
-            if (!element.className.contains("AMLogger")) {
-                val fileName = element.fileName ?: "Unknown"
-                val methodName = element.methodName ?: "unknown"
-                val lineNumber = element.lineNumber
-                return Triple(fileName, methodName, lineNumber)
-            }
-        }
-        return Triple("Unknown", "unknown", 0)
-    }
-
-    private fun log(level: Level, message: String, tag: String = "", exception: Throwable? = null) {
-        val (fileName, functionName, lineNumber) = getCallerInfo()
-        val entry = LogEntry(
-            level = level,
-            message = message,
-            tag = tag,
-            timestamp = Date(),
-            thread = Thread.currentThread().name,
-            fileName = fileName,
-            functionName = functionName,
-            lineNumber = lineNumber,
-            exception = exception
-        )
-
-        logQueue.offer(entry)
-    }
-
-    // Main logging methods
-    fun verbose(message: String, tag: String = "", exception: Throwable? = null) {
+    fun verbose(message: String, tag: String = "", exception: Throwable? = null) =
         log(Level.VERBOSE, message, tag, exception)
-    }
 
-    fun debug(message: String, tag: String = "", exception: Throwable? = null) {
+    fun debug(message: String, tag: String = "", exception: Throwable? = null) =
         log(Level.DEBUG, message, tag, exception)
-    }
 
-    fun info(message: String, tag: String = "", exception: Throwable? = null) {
+    fun info(message: String, tag: String = "", exception: Throwable? = null) =
         log(Level.INFO, message, tag, exception)
-    }
 
-    fun warning(message: String, tag: String = "", exception: Throwable? = null) {
+    fun warning(message: String, tag: String = "", exception: Throwable? = null) =
         log(Level.WARNING, message, tag, exception)
-    }
 
-    fun error(message: String, tag: String = "", exception: Throwable? = null) {
+    fun error(message: String, tag: String = "", exception: Throwable? = null) =
         log(Level.ERROR, message, tag, exception)
-    }
 
-    // Convenience methods
     fun v(message: String, tag: String = "", exception: Throwable? = null) = verbose(message, tag, exception)
     fun d(message: String, tag: String = "", exception: Throwable? = null) = debug(message, tag, exception)
     fun i(message: String, tag: String = "", exception: Throwable? = null) = info(message, tag, exception)
     fun w(message: String, tag: String = "", exception: Throwable? = null) = warning(message, tag, exception)
     fun e(message: String, tag: String = "", exception: Throwable? = null) = error(message, tag, exception)
 
-    // Advanced features
-    fun addFilter(filter: (LogEntry) -> Boolean) {
-        filters.add(filter)
-    }
-
-    fun removeAllFilters() {
-        filters.clear()
-    }
-
-    fun flush() {
-        // Process remaining queue items
-        while (logQueue.isNotEmpty()) {
-            logQueue.poll()?.let { processLogEntry(it) }
-        }
-    }
-
-    fun getLogFileSize(): Long = logFile?.length() ?: 0
-
-    fun clearLogFile() {
-        logFile?.writeText("")
-    }
-
-    fun shutdown() {
-        flush()
-        loggingScope?.cancel()
-        loggingScope = null
-    }
-
-    // Performance measurement
     inline fun <T> measure(tag: String = "", block: () -> T): T {
         val start = System.nanoTime()
         val result = block()
-        val duration = (System.nanoTime() - start) / 1_000_000.0 // Convert to milliseconds
+        val duration = (System.nanoTime() - start) / 1_000_000.0
         debug("⏱️ Execution time: %.2f ms".format(duration), tag)
         return result
     }
 
-    // Network/API logging helper
-    fun logRequest(url: String, method: String, headers: Map<String, String>? = null, body: String? = null) {
+    fun logRequest(url: String, method: String, headers: Map<String, String>? = null, body: String? = null, tag: String = "") {
         val message = buildString {
-            append("🌐 $method $url")
-            headers?.let {
-                append("\nHeaders: $it")
-            }
-            body?.let {
-                append("\nBody: $it")
-            }
+            append("🌐 ").append(method).append(' ').append(url)
+            headers?.let { append("\nHeaders: ").append(it) }
+            body?.let { append("\nBody: ").append(it) }
         }
-        debug(message, "Network")
+        debug(message,  tag)
     }
 
     fun logResponse(url: String, statusCode: Int, responseTime: Long, body: String? = null) {
@@ -383,13 +166,67 @@ object AMLogger {
             in 500..599 -> "❌"
             else -> "❓"
         }
-
         val message = buildString {
-            append("$emoji $statusCode $url (${responseTime}ms)")
-            body?.let { append("\nResponse: $it") }
+            append(emoji).append(' ').append(statusCode).append(' ').append(url)
+            append(" (").append(responseTime).append("ms)")
+            body?.let { append("\nResponse: ").append(it) }
         }
-
         val level = if (statusCode >= 400) Level.WARNING else Level.DEBUG
-        log(level, message, "Network")
+        log(level, message, "AMLoggerNetwork", null)
     }
+
+    private fun ensureConfigured() {
+        check(configured) { "AMLogger is not configured. Call AMLogger.configure { ... } first." }
+    }
+
+    private fun log(level: Level, message: String, tag: String, exception: Throwable?) {
+        ensureConfigured()
+        val (file, fn, line) = caller()
+        AMLoggerCore.log(
+            CoreLogEntry(
+                ts = Date(),
+                priority = level.priority,
+                tag = tag.ifBlank { null },
+                msg = message,
+                throwable = exception,
+                file = file,
+                fn = fn,
+                line = line,
+                thread = Thread.currentThread().name,
+                ansiColor = level.colorCode
+            )
+        )
+    }
+
+    private fun String.withEmoji(level: Level): String = "${level.emoji} $this"
+
+    private fun caller(): Triple<String?, String?, Int?> {
+        val st = Thread.currentThread().stackTrace
+        for (i in 3 until st.size) {
+            val e = st[i]
+            if (!e.className.contains("AMLogger")) {
+                return Triple(e.fileName, e.methodName, e.lineNumber)
+            }
+        }
+        return Triple(null, null, null)
+    }
+
+    private fun CoreLogEntry.toPublic(): LogEntry =
+        LogEntry(
+            level = when (priority) {
+                2 -> Level.VERBOSE
+                3 -> Level.DEBUG
+                4 -> Level.INFO
+                5 -> Level.WARNING
+                else -> Level.ERROR
+            },
+            message = msg,
+            tag = tag ?: "",
+            timestamp = ts,
+            thread = thread ?: "",
+            fileName = file,
+            functionName = fn,
+            lineNumber = line,
+            exception = throwable
+        )
 }
