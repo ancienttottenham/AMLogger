@@ -4,8 +4,10 @@ plugins {
     id("maven-publish")
 }
 
+group = "com.github.ancienttottenham"
+
 android {
-    namespace = "com.arturdev.amlogger"
+    namespace = "com.ancienttottenham.amlogger"
     compileSdk = 36
 
     defaultConfig {
@@ -30,6 +32,22 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
+    }
+
+    publishing {
+        singleVariant("release")
+    }
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+                groupId = "com.github.ancienttottenham"
+                artifactId = "AMLogger"
+            }
+        }
     }
 }
 

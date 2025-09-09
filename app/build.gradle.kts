@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.arturdev.amloggerproject"
+    namespace = "com.ancienttottenham.amloggerproject"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.arturdev.amloggerproject"
+        applicationId = "com.ancienttottenham.amloggerproject"
         minSdk = 21
         targetSdk = 36
         versionCode = 1
