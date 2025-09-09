@@ -1,0 +1,4 @@
+[submodule "amlogger-core"]
+	path = amlogger-core
+	url = git@github.com:ancienttottenham/AMLoggerCore.git
+	branch = main

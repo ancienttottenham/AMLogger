@@ -22,12 +22,6 @@ dependencyResolutionManagement {
 rootProject.name = "AMLoggerProject"
 if (System.getenv("JITPACK") != "true") {
     include(":app")
-}
-include(":amlogger")
-
-val wantsCore =
-    gradle.startParameter.taskNames.any { it.contains(":amlogger-core") }
-
-if (wantsCore && file("amlogger-core").isDirectory) {
     include(":amlogger-core")
 }
+include(":amlogger")

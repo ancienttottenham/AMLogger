@@ -12,7 +12,6 @@
 build*
 /build
 /captures
-/amlogger-core
 .externalNativeBuild
 .cxx
 local.properties
