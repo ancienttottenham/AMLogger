@@ -1,11 +1,11 @@
-package com.arturdev.amloggerproject
+package com.ancienttottenham.amloggerproject
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.arturdev.amlogger.AMLogger
+import com.ancienttottenham.amlogger.AMLogger
 import java.io.File
 
 class MainActivity : AppCompatActivity() {

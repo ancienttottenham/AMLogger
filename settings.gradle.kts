@@ -20,5 +20,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AMLoggerProject"
-include(":app")
+if (System.getenv("JITPACK") != "true") {
+    include(":app")
+}
 include(":amlogger")

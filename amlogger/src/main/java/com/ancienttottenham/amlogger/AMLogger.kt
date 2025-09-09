@@ -1,4 +1,4 @@
-package com.arturdev.amlogger
+package com.ancienttottenham.amlogger
 
 import android.content.Context
 import android.util.Log
