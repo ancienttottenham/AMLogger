@@ -20,7 +20,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AMLoggerProject"
-if (System.getenv("JITPACK") != "true") {
+val isCI = System.getenv("GITHUB_ACTIONS")?.equals("true", ignoreCase = true) == true
+if (!isCI) {
     include(":app")
 }
 include(":amlogger")
